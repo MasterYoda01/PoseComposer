@@ -3,7 +3,7 @@ DEMO_NAME="lib_testing"
 
 CUDA_VISIBLE_DEVICES=0 accelerate launch \
     --mixed_precision=fp16 \
-    control_inf.py \
+    knit.py \
     --pretrained_model_name_or_path runwayml/stable-diffusion-v1-5 \
     --finetuned_model_path model/fastcomposer \
     --test_reference_folder data/newton_einstein \
