@@ -21,10 +21,10 @@ from fastcomposer.model import FastComposerModel
 from fastcomposer.pipeline import stable_diffusion_call_with_references_delayed_conditioning
 from fastcomposer.utils import parse_args
 
-from ControlNet.annotator.util import resize_image, HWC3
-from ControlNet.annotator.openpose import OpenposeDetector
-from ControlNet.cldm.model import create_model, load_state_dict
-from ControlNet.cldm.ddim_hacked import DDIMSampler
+from annotator.util import resize_image, HWC3
+from annotator.openpose import OpenposeDetector
+from cldm.model import create_model, load_state_dict
+from cldm.ddim_hacked import DDIMSampler
 
 apply_openpose = OpenposeDetector()
 
@@ -38,7 +38,7 @@ def stable_diffusion_call_control_and_fastcomposer(
     num_inference_steps: int = 50,
     guidance_scale: float = 7.5,
     negative_prompt: Optional[Union[str, List[str]]] = None,
-    num_images_per_prompt = Optional[int] = 1,
+    num_images_per_prompt: Optional[int] = 1,
     eta: float = 0.0,
     generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
     latents: Optional[torch.FloatTensor] = None,
@@ -312,7 +312,9 @@ class CombinedSampler:
                 input_ids, image_token_mask, object_embeds, num_objects
             )[0]
 
-            encoder_hidden_states_text_only = pipe._encode_prompt(
+            prompt = args.test_caption
+            prompt_text_only = prompt.replace(unique_token, "")
+            encoder_hidden_states_text_only = self.fastcomposer_pipe._encode_prompt(
                 prompt_text_only,
                 device,
                 fastcomposer_args.num_images_per_prompt,
@@ -396,8 +398,8 @@ def main():
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
-    cn_model_path = "./ControlNet/models/cldm_v15.yaml"
-    cn_state_dict_path = "./ControlNet/models/control_sd15_openpose.pth"
+    cn_model_path = "./models/cldm_v15.yaml"
+    cn_state_dict_path = "./model/controlnet/control_sd15_openpose.pth"
 
     # Initialize combined sampler
     sampler = CombinedSampler(cn_model_path, cn_state_dict_path)
