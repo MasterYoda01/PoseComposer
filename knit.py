@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from accelerate import Accelerator
 from accelerate.utils import set_seed
 from diffusers import StableDiffusionPipeline
+from diffusers.pipelines.stable_diffusion import StableDiffusionPipelineOutput
 from transformers import CLIPTokenizer
 
 from fastcomposer.transforms import get_object_transforms
@@ -51,13 +52,14 @@ def stable_diffusion_call_control_and_fastcomposer(
     callback_steps: int = 1,
     cross_attention_kwargs: Optional[Dict[str, Any]] = None,
     start_merge_step = 0,
-    control_net_model: Optional[DDIMSampler] = None
+    control_net_model: Optional[DDIMSampler] = None,
+    control_net_cond_embed: Optional[torch.FloatTensor] = None
 ):
-    #0. Default height and width to unet
+    # 0. Default height and width to unet
     height = height or self.unet.config.sample_size * self.vae_scale_factor
     width = width or self.unet.config.sample_size * self.vae_scale_factor
 
-    #1. Check inputs. Raise error if not correct
+    # 1. Check inputs. Raise error if not correct
     self.check_inputs(
         prompt,
         height, 
@@ -94,22 +96,20 @@ def stable_diffusion_call_control_and_fastcomposer(
 
     prompt_embeds = torch.cat([prompt_embeds, prompt_embeds_text_only], dim=0)
 
-    self.scheduler.set_timesteps(num_inferenc_steps, device=device)
-    fastcomposer_timesteps = self.scheduler.timesteps
+    # 4. Create schedule based on the DDIMSampler
+    #control_net_model.make_schedule(ddim_num_steps=num_inference_steps, ddim_eta=eta, verbose=False) 
+    self.scheduler.set_timesteps(num_inference_steps, device=device)
+    timesteps = self.scheduler.timesteps
+    #control_net_timesteps = control_net_model.ddim_timesteps
 
-    # 5. Prepare latent variables
-    num_channels_latents = self.unet.in_channels
-    latents = self.prepare_latents(
-        batch_size * num_images_per_prompt,
-        num_channels_latents,
-        height,
-        width,
-        prompt_embeds.dtype,
-        device,
-        generator,
-        latents,
+    # 5. Prepare initial latents 
+    latents = torch.randn(
+        (1, self.unet.in_channels, height // 8, width // 8),
+        generator=generator,
+        device=device
     )
 
+    # 6. Arrange conditional embeddings
     extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
     (
         null_prompt_embeds,
@@ -117,8 +117,10 @@ def stable_diffusion_call_control_and_fastcomposer(
         text_prompt_embeds,
     ) = prompt_embeds.chunk(3)
 
-    # 6. Denoising loop
-    # TODO: edit for controlnet conditioning on loop 
+    text_pose_embeddings = text_prompt_embeds + control_net_cond_embed
+    full_embeddings = text_prompt_embeds + control_net_cond_embed + augmented_prompt_embeds
+    
+    # 7. Denoising loop
     num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
     with self.progress_bar(total=num_inference_steps) as progress_bar:
         for i, t in enumerate(timesteps):
@@ -129,11 +131,11 @@ def stable_diffusion_call_control_and_fastcomposer(
 
             if i <= start_merge_step:
                 current_prompt_embeds = torch.cat(
-                    [null_prompt_embeds, text_prompt_embeds], dim=0
+                    [null_prompt_embeds, text_pose_embeddings], dim=0
                 )
             else: 
                 current_prompt_embeds = torch.cat(
-                    [null_prompt_embeds, augmented_prompt_embeds], dim=0
+                    [null_prompt_embeds, full_embeddings], dim=0
                 )
 
             # predict the noise residual
@@ -156,7 +158,7 @@ def stable_diffusion_call_control_and_fastcomposer(
             # compute the previous noise sample x_t -> x_{t-1}
             latents = self.scheduler.step(
                 noise_pred, t, latents, **extra_step_kwargs
-            ).prev_sample
+                ).prev_sample
 
             # call the callback, if provided
             if i == len(timesteps) - 1  or (
@@ -170,21 +172,21 @@ def stable_diffusion_call_control_and_fastcomposer(
         images = latents
         has_nsfw_concept = None
     elif output_type == "pil":
-        # 7. Post-processing
+        # 8. Post-processing
         image = self.decode_latents(latents)
 
-        # 8. Run safety checker 
+        # 9. Run safety checker 
         image, has_nsfw_concept = self.run_safety_checker(
             image, device, prompt_embeds.dtype
         )
 
-        # 9. Convert to PIL
+        # 10. Convert to PIL
         image = self.numpy_to_pil(image)
     else:
-        # 7. Post-processing
+        # 8. Post-processing
         image = self.decode_latents(latents)
 
-        # 8. Run safety checker
+        # 9. Run safety checker
         image, has_nsfw_concept = self.run_safety_checker(
             image, device, prompt_embeds.dtype
         )
@@ -218,8 +220,7 @@ class CombinedSampler:
 
         model = FastComposerModel.from_pretrained(args)
         model.load_state_dict(
-            torch.load(Path(args.finetuned_model_path) / "pytorch_model.bin", map_location="cpu")
-        )
+            torch.load(Path(args.finetuned_model_path) / "pytorch_model.bin", map_location="cuda:0")        )
         model = model.to(device=accelerator.device, dtype=weight_dtype)                                                                                                                            
         pipe.unet = model.unet
         if args.enable_xformers_memory_efficient_attention:
@@ -294,6 +295,11 @@ class CombinedSampler:
             print(f"Image IDs: {image_ids}")
             demo_dataset.set_image_ids(image_ids)
 
+            unique_token = "<|image|>"
+
+            prompt = fastcomposer_args.test_caption
+            prompt_text_only = prompt.replace(unique_token, "")
+
             batch = demo_dataset.get_data()
             
             # Process FastComposer inputs
@@ -312,8 +318,6 @@ class CombinedSampler:
                 input_ids, image_token_mask, object_embeds, num_objects
             )[0]
 
-            prompt = args.test_caption
-            prompt_text_only = prompt.replace(unique_token, "")
             encoder_hidden_states_text_only = self.fastcomposer_pipe._encode_prompt(
                 prompt_text_only,
                 device,
@@ -333,49 +337,24 @@ class CombinedSampler:
         time_range = reversed(range(0,timesteps)) 
         total_steps = timesteps 
         
-        iterator = tqdm(time_range, desc='Combined FastComposer-ControlNet Sampling', total=total_steps)
+        print(fastcomposer_args)
 
-        for i, step in enumerate(iterator):
-            index = total_steps - i - 1
-            ts = torch.full((b,), step, device=device, dtype=torch.long)
-            
-            if mask is not None:
-                assert x0 is not None
-                img_orig = self.model.q_sample(x0, ts)
-                img = img_orig * mask + (1. - mask) * img
-            
-            if ucg_schedule is not None:
-                unconditional_guidance_scale = ucg_schedule[i]
-            
-            # Combine FastComposer and ControlNet conditions
-            combined_cond = {
-                'c_concat': [controlnet_cond],
-                'c_crossattn': [cond],
-            }
-            
-            # Sample step
-            outs = self.ddim_sampler.p_sample_ddim(
-                img, combined_cond, ts, index=index,
-                use_original_steps=ddim_use_original_steps,
-                quantize_denoised=quantize_denoised,
-                temperature=temperature,
-                noise_dropout=noise_dropout,
-                score_corrector=score_corrector,
-                corrector_kwargs=corrector_kwargs,
-                unconditional_guidance_scale=unconditional_guidance_scale,
-                unconditional_conditioning=unconditional_conditioning,
-                dynamic_threshold=dynamic_threshold
-            )
-            
-            img, pred_x0 = outs
-            if callback: callback(i)
-            if img_callback: img_callback(pred_x0, i)
-            
-            if index % log_every_t == 0 or index == total_steps - 1:
-                intermediates['x_inter'].append(img)
-                intermediates['pred_x0'].append(pred_x0)
+        images = self.fastcomposer_pipe.inference(
+            prompt_text_only,
+            shape[0],
+            shape[1],
+            shape[2],
+            total_steps,
+            fastcomposer_args.num_images_per_prompt,
+            fastcomposer_args.eta, # broken
+            fastcomposer_args.generator, # broken
+            control_net_model = self.ddim_sampler,
+            control_net_cond_embed = controlnet_cond,
+            start_merge_step = 5
+        )
 
-        return img, intermediates
+        return images['images']
+
 
 @torch.no_grad()
 def main():
