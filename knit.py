@@ -14,6 +14,7 @@ from accelerate import Accelerator
 from accelerate.utils import set_seed
 from diffusers import StableDiffusionPipeline
 from diffusers.pipelines.stable_diffusion import StableDiffusionPipelineOutput
+from diffusers.schedulers import PNDMScheduler
 from transformers import CLIPTokenizer
 
 from fastcomposer.transforms import get_object_transforms
@@ -26,45 +27,90 @@ from ControlNet.annotator.util import resize_image, HWC3
 from ControlNet.annotator.openpose import OpenposeDetector
 from ControlNet.cldm.model import create_model, load_state_dict
 from ControlNet.cldm.ddim_hacked import DDIMSampler
+from ControlNet.ldm.modules.diffusionmodules.util import make_ddim_timesteps, make_ddim_sampling_parameters, noise_like, extract_into_tensor
 
 apply_openpose = OpenposeDetector()
 
-#@torch.no_grad()
-#def tokenize_and_mask_noun_phrases_ends(
-#    pipe: StableDiffusionPipeline,
-#    caption):
-#    input
+#class KnittedScheduler(PNDMScheduler):
+#    def __init__(base_scheduler: PNDMScheduler, controlnet_model):
+#        # Copy state from base scheduler
+#        self.betas = base_scheduler.betas
+#        self.alphas = base_scheduler.alphas
+#        self.final_alpha_cumprod = base_scheduler.final_alpha_cumprod 
 #
-#@torch.no_grad()
-#def encode_augmented_prompt(
-#    pipe: StableDiffusionPipeline, 
-#    prompt: str, 
-#    reference_images: List[Image.Image], 
-#    device: torch.device,
-#    weight_dtype: torch.dtype
-#):
-#    object_pixel_values = []
-#    for image in reference_images:
-#        image_tensor = torch.from_numpy(np.array(image.convert("RGB"))).permute(2, 0, 1)
-#        image = self.object_transforms(image_tensor)
-#        object_pixel_values.append(image)
+#        self.init_noise_sigma = base_scheduler.init_noise_sigma
 #
-#    object_pixel_values = torch.stack(object_pixel_values, dim=0)
-#    object_pixel_values = object_pixel_values.unsqueeze(0).to(dtype=weight_dtype, device=device)
-#    object_embeds = self.image_encoder(object_pixel_values)
+#        self.pndm_order = base_scheduler.pndm_order 
 #
-#    input_ids, image_token_mask = tokenize_and_mask_noun_phrases_ends(prompt)
-#    input_ids, image_token_mask = input_ids.to(device), image_token_mask.to(device)
+#        self.cur_model_output = base_scheduler.cur_model_output  
+#        self.counter = base_scheduler.counter  
+#        self.cur_sample = base_scheduler.cur_sample  
+#        self.ets = base_scheduler.ets  
 #
-#    num_objects = image_token_mask.sum(dim=1)
+#        self.num_inference_steps = base_scheduler.num_inference_steps  
+#        self._timesteps = base_scheduler._timesteps  
+#        self.prk_timesteps = base_scheduler.prk_timesteps  
+#        self.plms_timesteps = base_scheduler.plms_timesteps  
+#        self.timesteps = base_scheduler.timesteps 
 #
-#    augmented_prompt_embeds = self.postfuse_module(
-#        self.text_encoder(input_ids)[0],
-#        object_embeds,
-#        image_token_mask,
-#        num_objects
-#    )
-#    return augmented_prompt_embeds
+#        self.controlnet_model = controlnet_model
+#
+#    def register_buffer(self, name, attr, device):
+#        if type(attr) == torch.Tensor:
+#            if attr.device != device:
+#                attr = attr.to(device)
+#        setattr(self, name, attr)
+#
+#
+#    def set_timesteps(self, num_inference_steps: int, eta: float, device: Union[str, torch.device] = None):
+#        """
+#        Sets the discrete timesteps used for the diffusion chain
+#        """
+#        self.ddim_timesteps = make_ddim_timesteps(ddim_discr_method="uniform", num_ddim_timesteps=num_inference_steps,
+#            num_ddpm_timesteps = self.controlnet_model.num_timesteps)
+#
+#        alphas_cumprod = self.controlnet_model.alphas_cumprod
+#        assert alphas_cumprod.shape[0] == self.ddpm_num_timesteps
+#        to_torch = lambda x: x.clone().detach().to(torch.float32).to(self.model.device)
+#
+#        self.register_buffer('betas', to_torch(self.controlnet_model.betas), device)
+#        self.register_buffer('alphas_cumprod', to_torch(alphas_cumprod), device)
+#        self.register_buffer('alphas_cumprod_prev', to_torch(self.controlnet_model.alphas_cumprod_prev), device)
+#
+#        # calculations for diffusiont q(x_t | x_{t-1}) and others
+#        self.register_buffer('sqrt_alphas_cumprod', to_torch(np.sqrt(alphas_cumprod.cpu())), device)
+#        self.register_buffer('sqrt_one_minus_alphas_cumprod', to_torch(np.sqrt(1. - alphas_cumprod.cpu())), device)
+#        self.register_buffer('log_one_minus_alphas_cumprod', to_torch(np.log(1. - alphas_cumprod.cpu())), device)
+#        self.register_buffer('sqrt_recip_alphas_cumprod', to_torch(np.sqrt(1. / alphas_cumprod.cpu())), device)
+#        self.register_buffer('sqrt_recipm1_alphas_cumprod', to_torch(np.sqrt(1. / alphas_cumprod.cpu() - 1)), device)
+#
+#        # ddim sampling parameters
+#        ddim_sigmas, ddim_alphas, ddim_alphas_prev = make_ddim_sampling_parameters(alphacums=alphas_cumprod.cpu(),
+#                                                                                    ddim_timesteps=self.ddim_timesteps,
+#                                                                                    eta=ddim_eta)
+#        self.register_buffer('ddim_sigmas', ddim_sigmas, device)
+#        self.register_buffer('ddim_alphas', ddim_alphas, device)
+#        self.register_buffer('ddim_alphas_prev', ddim_alphas_prev, device)
+#        self.register_buffer('ddim_sqrt_one_minus_alphas', np.sqrt(1. - ddim_alphas), device)
+#        sigmas_for_original_sampling_steps = ddim_eta * torch.sqrt(
+#            (1 - self.alphas_cumprod_prev) / (1 - self.alphas_cumprod) * (
+#                1 - self.alphas_cumprod / self.alphas_cumprod_prev))
+#        self.register_buffer('ddim_sigmas_for_original_num_steps', sigmas_for_original_sampling_steps, device)
+#
+#
+#    def step(
+#        self,
+#        model_output: torch.Tensor,
+#        timestep: int,
+#        sample: torch.Tensor,
+#        return_dict: bool = True
+#    ) -> Union[SchedulerOutput, Tuple]:
+#        
+#        pass
+#
+#    def _get_prev_sample(self, sample, timestep, prev_timestep, model_output):
+#        pass
+#
 
 @torch.no_grad()
 def stable_diffusion_call_control_and_fastcomposer(
@@ -89,8 +135,9 @@ def stable_diffusion_call_control_and_fastcomposer(
     callback_steps: int = 1,
     cross_attention_kwargs: Optional[Dict[str, Any]] = None,
     start_merge_step = 0,
-    control_net_model: Optional[DDIMSampler] = None,
-    control_net_cond_embed: Optional[torch.FloatTensor] = None
+    controlnet_model: Optional[DDIMSampler] = None,
+    controlnet_cond = None,
+    controlnet_uncond = None
 ):
     # 0. Default height and width to unet
     height = height or self.unet.config.sample_size * self.vae_scale_factor
@@ -137,16 +184,8 @@ def stable_diffusion_call_control_and_fastcomposer(
     #control_net_model.make_schedule(ddim_num_steps=num_inference_steps, ddim_eta=eta, verbose=False) 
     self.scheduler.set_timesteps(num_inference_steps, device=device)
     timesteps = self.scheduler.timesteps
-    #print(f"\n\n\n\n{timesteps=}\n\n\n")
-    #control_net_timesteps = control_net_model.ddim_timesteps
 
     # 5. Prepare initial latents 
-    #latents = torch.randn(
-    #    (1, self.unet.in_channels, height // 8, width // 8),
-    #    generator=generator,
-    #    device=device
-    #)
-
     latents = self.prepare_latents(
         batch_size * num_images_per_prompt,
         self.unet.in_channels,
@@ -166,15 +205,11 @@ def stable_diffusion_call_control_and_fastcomposer(
         text_prompt_embeds,
     ) = prompt_embeds.chunk(3)
 
-    #print(f"\n\n\n{text_prompt_embeds.shape=}, {control_net_cond_embed.shape=}, {augmented_prompt_embeds.shape=}\n\n\n")
 
     # 7. Denoising loop
     num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
     with self.progress_bar(total=num_inference_steps) as progress_bar:
         for i, t in enumerate(timesteps):
-            #t = t.item()
-            #if t == num_inference_steps: 
-            #    t -= 1
 
             latent_model_input = (
                 torch.cat([latents] * 2) if do_classifier_free_guidance else latents
@@ -190,19 +225,53 @@ def stable_diffusion_call_control_and_fastcomposer(
                     [null_prompt_embeds, augmented_prompt_embeds], dim=0
                 )
 
-            # predict the noise residual
+            control_t = torch.full((batch_size,), t, device=device, dtype=torch.long)
+            # Get the controlNet preds
+            mid_resid, down_resids = controlnet_model.model.apply_model(
+                latent_model_input[1:].float(),
+                control_t,
+                controlnet_cond,
+                encoder_hidden_states=current_prompt_embeds,
+                cross_attention_kwargs=cross_attention_kwargs,
+            )
+
+            mid_resid = mid_resid.half()
+            down_resids = [d.half() for d in down_resids]
+
+            # predict the noise residual from fastcomposer
             noise_pred = self.unet(
                 latent_model_input,
                 t,
                 encoder_hidden_states=current_prompt_embeds,
                 cross_attention_kwargs=cross_attention_kwargs,
+                down_block_additional_residuals=down_resids,
+                mid_block_additional_residual=mid_resid
             ).sample
+                
+            # Get the controlNet preds
+            #mid_resid, down_resids = controlnet_model.model.apply_model(
+            #    latent_model_input[1:].float(),
+            #    control_t,
+            #    controlnet_cond,
+            #    encoder_hidden_states=current_prompt_embeds,
+            #    cross_attention_kwargs=cross_attention_kwargs,
+            #)
+
+            #model_uncond = controlnet_model.model.apply_model(
+            #    latent_model_input[0:1].float(),
+            #    control_t,
+            #    controlnet_uncond,
+            #    encoder_hidden_states=current_prompt_embeds,
+            #    cross_attention_kwargs=cross_attention_kwargs,
+            #)
 
             # perform fastcomposer guidance
             if do_classifier_free_guidance:
-                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                noise_pred = noise_pred_uncond + guidance_scale * (
-                    noise_pred_text - noise_pred_uncond
+                fc_uncond, fc_text = noise_pred.chunk(2)
+                #mixed_uncond = (model_uncond + fc_uncond)/2.0
+                #mixed_cond = (model_output + fc_text)/2.0
+                noise_pred = fc_uncond + guidance_scale * (
+                    fc_text - fc_uncond 
                 )
             else:
                 assert 0, "Not Implemented"
@@ -230,9 +299,9 @@ def stable_diffusion_call_control_and_fastcomposer(
         image = self.decode_latents(latents.half())
 
         # 9. Run safety checker 
-        image, has_nsfw_concept = self.run_safety_checker(
-            image, device, prompt_embeds.dtype
-        )
+        #image, has_nsfw_concept = self.run_safety_checker(
+        #    image, device, prompt_embeds.dtype
+        #)
 
         # 10. Convert to PIL
         image = self.numpy_to_pil(image)
@@ -241,14 +310,15 @@ def stable_diffusion_call_control_and_fastcomposer(
         image = self.decode_latents(latents)
 
         # 9. Run safety checker
-        image, has_nsfw_concept = self.run_safety_checker(
-            image, device, prompt_embeds.dtype
-        )
+        #image, has_nsfw_concept = self.run_safety_checker(
+        #    image, device, prompt_embeds.dtype
+        #)
 
     # Offload last model to CPU
     if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
         self.final_offload_hook.offload()
 
+    has_nsfw_concept = False
     if not return_dict:
         return (image, has_nsfw_concept)
 
@@ -276,7 +346,8 @@ class CombinedSampler:
         model.load_state_dict(
             torch.load(Path(args.finetuned_model_path) / "pytorch_model.bin", map_location="cpu")
         )
-        model = model.to(device=accelerator.device, dtype=weight_dtype)                                                                                                                            
+        model = model.to(device=accelerator.device, dtype=weight_dtype)                                                                                                                           
+        print(f"\n\n\n{model.unet=}\n\n\n")
         pipe.unet = model.unet
         if args.enable_xformers_memory_efficient_attention:
             pipe.unet.enable_xformers_memory_efficient_attention()
@@ -299,6 +370,7 @@ class CombinedSampler:
         self,
         cond,
         controlnet_cond,
+        controlnet_un_cond,
         shape,
         timesteps=None,
         x_T=None,
@@ -351,6 +423,7 @@ class CombinedSampler:
             demo_dataset.set_image_ids(image_ids)
 
             batch = demo_dataset.get_data()
+            print(f"\n\n\n{batch=}\n\n\n")
             
             # Process FastComposer inputs
             input_ids = batch["input_ids"].to(device)
@@ -402,8 +475,9 @@ class CombinedSampler:
             #eta,
             #fastcomposer_args.generator,
             guidance_scale=fastcomposer_args.guidance_scale,
-            control_net_model = self.ddim_sampler,
-            control_net_cond_embed = controlnet_cond,
+            controlnet_model = self.ddim_sampler,
+            controlnet_cond = controlnet_cond,
+            controlnet_uncond = controlnet_un_cond,
             start_merge_step = fastcomposer_args.start_merge_step,
             prompt_embeds = encoder_hidden_states,
             prompt_embeds_text_only = encoder_hidden_states_text_only
@@ -443,28 +517,37 @@ def main():
     sampler.setup_fastcomposer(args, accelerator, weight_dtype)
 
     # Prepare your conditions here
-    condition_image_path = "./data/celeba_test_single/001603/000000034.jpg"
+    condition_image_path = "./data/dab_pose.jpg"
     condition_image = HWC3(np.array(Image.open(condition_image_path)))
-    detected_map, _ = apply_openpose(resize_image(condition_image, 768))
+    detected_map, _ = apply_openpose(resize_image(condition_image, 512))
     detected_map = HWC3(detected_map)
-    image_resolution = 768
+    image_resolution = 512
     condition_image = resize_image(condition_image, image_resolution)
     H, W, C = condition_image.shape
     
-    detected_map = cv2.resize(detected_map, (W, H), interpolation=cv2.INTER_NEAREST)
+    detected_map = cv2.resize(detected_map, (512, 512), interpolation=cv2.INTER_NEAREST)
 
     num_samples = 1
     control = torch.from_numpy(detected_map.copy()).float().cuda() / 255.0
     control = torch.stack([control for _ in range(num_samples)], dim=0)
     control = einops.rearrange(control, 'b h w c -> b c h w').clone()
+    unique_token = "<|image|>"
+    prompt = args.test_caption
+    prompt_text_only = prompt.replace(unique_token, "")
+    controlnet_cond = {"c_concat": [control], "c_crossattn": [sampler.control_model.get_learned_conditioning([prompt_text_only])]}
+    n_prompt = "longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality"
+    controlnet_un_cond = {"c_concat": [control], "c_crossattn": [sampler.control_model.get_learned_conditioning([n_prompt])]}
 
-    controlnet_cond = control  # Your ControlNet condition
     shape = (1, 4, 512, 512)  # Your desired shape
+
+    strength = 1.0
+    sampler.control_model.control_scales = [strength] * 13
 
     # Run combined sampling
     images = sampler.combined_sampling(
         cond=None,  # Will be set by FastComposer processing
         controlnet_cond=controlnet_cond,
+        controlnet_un_cond=controlnet_un_cond,
         shape=shape,
         unconditional_guidance_scale=args.guidance_scale,
         fastcomposer_args=args
