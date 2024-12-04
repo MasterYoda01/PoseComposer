@@ -1,7 +1,7 @@
-CAPTION="a man <|image|> and a man <|image|> are reading book together"
+CAPTION="a man <|image|> is reading book together"
 DEMO_NAME="lib_testing"
 
-CUDA_VISIBLE_DEVICES=0 accelerate launch \
+CUDA_VISIBLE_DEVICES=1 accelerate launch \
     --mixed_precision=fp16 \
     knit.py \
     --pretrained_model_name_or_path runwayml/stable-diffusion-v1-5 \
