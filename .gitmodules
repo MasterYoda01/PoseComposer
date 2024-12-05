@@ -1,0 +1,6 @@
+[submodule "PoseControl"]
+	path = PoseControl
+	url = https://github.com/Cgreg2500/PoseControl.git
+[submodule "ControlNet"]
+	path = ControlNet
+	url = https://github.com/Cgreg2500/PoseControl.git
