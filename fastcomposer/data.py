@@ -106,7 +106,7 @@ class DemoDataset(object):
     def prepare_data(self):
         object_pixel_values = []
         image_ids = []
-
+        
         for image_id in self.image_ids:
             if image_id[0] == ".":
                 continue
