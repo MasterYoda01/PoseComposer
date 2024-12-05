@@ -108,6 +108,8 @@ class DemoDataset(object):
         image_ids = []
 
         for image_id in self.image_ids:
+            if image_id[0] == ".":
+                continue
             reference_image_path = sorted(
                 glob.glob(os.path.join(self.test_reference_folder, image_id, "*.jpg"))
                 + glob.glob(os.path.join(self.test_reference_folder, image_id, "*.png"))

@@ -1,19 +1,19 @@
-CAPTION="a man <|image|> and a man <|image|> are reading book together"
-DEMO_NAME="lib_testing"
+CAPTION="a man <|image|> doing yoga"
+DEMO_NAME="einstein"
 
 CUDA_VISIBLE_DEVICES=0 accelerate launch \
     --mixed_precision=fp16 \
     knit.py \
     --pretrained_model_name_or_path runwayml/stable-diffusion-v1-5 \
     --finetuned_model_path model/fastcomposer \
-    --test_reference_folder data/newton_einstein \
+    --test_reference_folder data/einstein \
     --test_caption "${CAPTION}" \
     --output_dir outputs/${DEMO_NAME} \
     --mixed_precision fp16 \
     --image_encoder_type clip \
     --image_encoder_name_or_path openai/clip-vit-large-patch14 \
     --num_image_tokens 1 \
-    --max_num_objects 2 \
+    --max_num_objects 1 \
     --object_resolution 224 \
     --generate_height 512 \
     --generate_width 512 \
@@ -21,6 +21,6 @@ CUDA_VISIBLE_DEVICES=0 accelerate launch \
     --num_rows 1 \
     --seed 42 \
     --guidance_scale 5 \
-    --inference_steps 50 \
+    --inference_steps 100 \
     --start_merge_step 10 \
     --no_object_augmentation
