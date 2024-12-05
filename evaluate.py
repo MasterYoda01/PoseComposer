@@ -1,147 +1,171 @@
-
 from evaluation.single_object.data import get_combinations
-from demo.pipeline import convert_model_to_pipeline
-from fastcomposer.utils import parse_args
-from accelerate.utils import set_seed
+from evaluation.clip_eval import CLIPEvaluator
+from torchvision.transforms import ToTensor
 from accelerate import Accelerator
-import torch
-import glob 
-import PIL
-import os 
-
-import numpy as np
+from typing import List
 from PIL import Image
-from tqdm.auto import tqdm
-from pathlib import Path
-import types
-import cv2 
-import einops
-from typing import Any, Callable, Dict, List, Optional, Union
+from tqdm import tqdm
+import numpy as np
+import argparse
+import torch
+import glob
+import os
+from facenet_pytorch import MTCNN, InceptionResnetV1
 
-from accelerate import Accelerator
-from accelerate.utils import set_seed
-from diffusers import StableDiffusionPipeline
-from diffusers.pipelines.stable_diffusion import StableDiffusionPipelineOutput
-from diffusers.schedulers import PNDMScheduler
-from transformers import CLIPTokenizer
 
-from fastcomposer.transforms import get_object_transforms
-from fastcomposer.data import DemoDataset
-from fastcomposer.model import FastComposerModel
-from fastcomposer.pipeline import stable_diffusion_call_with_references_delayed_conditioning
-from fastcomposer.utils import parse_args
+def read_reference_images(folder_path: str) -> List[np.ndarray]:
+    images = []
+    for filename in os.listdir(folder_path):
+        image_path = os.path.join(folder_path, filename)
+        image = Image.open(image_path).convert("RGB")
+        images.append(image)
+    return images
 
-from ControlNet.annotator.util import resize_image, HWC3
-from ControlNet.annotator.openpose import OpenposeDetector
-from ControlNet.cldm.model import create_model, load_state_dict
-from ControlNet.cldm.ddim_hacked import DDIMSampler
-from ControlNet.ldm.modules.diffusionmodules.util import make_ddim_timesteps, make_ddim_sampling_parameters, noise_like, extract_into_tensor
 
-from knit import CombinedSampler
-from knit import apply_openpose
+def compute_similarity_matrix(
+    evaluator, cropped_images: List[np.ndarray], reference_images: List[np.ndarray]
+) -> np.ndarray:
+    similarity_matrix = np.zeros((len(cropped_images), len(reference_images)))
+    for i, cropped_image in enumerate(cropped_images):
+        for j, reference_image in enumerate(reference_images):
+            embed1 = evaluator(cropped_image)
+            embed2 = evaluator(reference_image)
+            similarity_matrix[i, j] = embed1 @ embed2.T
+
+    print(similarity_matrix)
+    return similarity_matrix
+
+
+def greedy_matching(scores):
+    n, m = scores.shape
+    assert n == m
+    res = []
+    for _ in range(m):
+        pos = np.argmax(scores)
+        i, j = pos // m, pos % m
+
+        res.append(scores[i, j])
+        scores[i, :] = -1
+        scores[:, j] = -1
+
+    return min(res)
+
+
+def save_image(tensor, path):
+    tensor = (tensor[0] * 0.5 + 0.5).clamp(min=0, max=1).permute(1, 2, 0) * 255.0
+    tensor = tensor.cpu().numpy().astype(np.uint8)
+
+    Image.fromarray(tensor).save(path)
+
+
+def compute_average_similarity(
+    face_detector, face_similarity, generated_image, reference_image
+) -> float:
+    generated_face = face_detector(generated_image)
+
+    if generated_face == None:
+        return 0.0
+    generated_face = generated_face[:1]
+
+    reference_face = face_detector(reference_image)[:1]
+    assert len(reference_face) == 1, "no reference face detected in reference image"
+
+    generated_face = generated_face.to(face_detector.device).reshape(1, 3, 160, 160)
+    reference_face = reference_face.to(face_detector.device).reshape(1, 3, 160, 160)
+
+    similarity = face_similarity(generated_face) @ face_similarity(reference_face).T
+    return max(similarity.item(), 0.0)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--num_images_per_prompt", type=int, default=4)
+    parser.add_argument("--prediction_folder", type=str)
+    parser.add_argument("--reference_folder", type=str)
+    parser.add_argument("--prompt", type=str)
+
+    args = parser.parse_args()
+    return args
+
+
+def load_reference_image(reference_folder, image_id):
+    path = os.path.join(reference_folder, image_id)
+    image_path = sorted(glob.glob(os.path.join(path, "*.jpeg")))[0]
+    image = Image.open(image_path).convert("RGB")
+    return image
+
 
 @torch.no_grad()
 def main():
     args = parse_args()
-    accelerator = Accelerator(
-        mixed_precision=args.mixed_precision,
+
+    accelerator = Accelerator()
+
+    face_detector = MTCNN(
+        image_size=160,
+        margin=0,
+        min_face_size=20,
+        thresholds=[0.6, 0.7, 0.7],
+        factor=0.709,
+        post_process=True,
+        device=accelerator.device,
+        keep_all=True,
+    )
+    face_similarity = (
+        InceptionResnetV1(pretrained="vggface2").eval().to(accelerator.device)
     )
 
-    # If passed along, set the seed now.
-    if args.seed is not None:
-        set_seed(args.seed)
+    text_evaluator = CLIPEvaluator(device=accelerator.device, clip_model="ViT-L/14")
 
-    # Setup weight dtype
-    weight_dtype = torch.float32
-    if accelerator.mixed_precision == "fp16":
-        weight_dtype = torch.float16
-    elif accelerator.mixed_precision == "bf16":
-        weight_dtype = torch.bfloat16
+    # get subject
+    # prompt_subject_pairs = get_combinations("", is_fastcomposer=True, split="eval")
+    image_alignments, text_alignments = [], []
+    print(os.path.join(args.prediction_folder, "*.png"))
+    images = glob.glob(os.path.join(args.prediction_folder, "*.png"))
+    print(images)
+    for image_path in images:
+        image = image_path.split("/")[-1]
+        image_id = image.split(".")[0]
+        print(image_id)
 
-    cn_model_path = "./ControlNet/models/cldm_v15.yaml"
-    cn_state_dict_path = "./ControlNet/models/control_sd15_openpose.pth"
+        # TODO: Load reference images using image_ids from subjects
+        ref_image_path = glob.glob(os.path.join(args.reference_folder, image_id, "*.png"))[0]
+        ref_image = Image.open(ref_image_path).convert("RGB")
 
-    # Initialize combined sampler
-    sampler = CombinedSampler(cn_model_path, cn_state_dict_path)
+        # for instance_id in range(args.num_images_per_prompt):
+        generated_image_path = os.path.join(args.prediction_folder, image)
+        generated_image = Image.open(generated_image_path).convert("RGB")
 
-    # Setup both components
-    sampler.setup_fastcomposer(args, accelerator, weight_dtype)
+        identity_similarity = compute_average_similarity(
+            face_detector, face_similarity, generated_image, ref_image
+        )
 
-    # Prepare your conditions here
-    condition_image_path = "./images/poses/headshot.jpg"
-    condition_image = HWC3(np.array(Image.open(condition_image_path)))
-    detected_map, _ = apply_openpose(resize_image(condition_image, 512))
-    detected_map = HWC3(detected_map)
-    image_resolution = 512
-    condition_image = resize_image(condition_image, image_resolution)
-    H, W, C = condition_image.shape
-    detected_map = cv2.resize(detected_map, (512, 512), interpolation=cv2.INTER_NEAREST)
+        generated_image_tensor = (
+            ToTensor()(generated_image).unsqueeze(0) * 2.0 - 1.0
+        )
+        prompt_similarity = text_evaluator.txt_to_img_similarity(
+            args.prompt, generated_image_tensor
+        )
 
-    num_samples = 1
-    control = torch.from_numpy(detected_map.copy()).float().cuda() / 255.0
-    control = torch.stack([control for _ in range(num_samples)], dim=0)
-    control = einops.rearrange(control, 'b h w c -> b c h w').clone()
-    unique_token = "<|image|>"
-
-    shape = (1, 4, 512, 512)  # Your desired shape
-
-    strength = 1.0
-    sampler.control_model.control_scales = [strength] * 13
+        image_alignment = float(identity_similarity)
+        text_alignment = float(prompt_similarity)
+        print(f"Image Alignment: {image_alignment}")
+        print(f"Text Alignment: {text_alignment}")
+        with open(os.path.join(args.prediction_folder, "score.txt"), "w") as f:
+            f.write(f"Image Alignment: {image_alignment} Text Alignment: {text_alignment}")
+            # f.write(f"Image Alignment Std: {image_std} Text Alignment Std: {text_std}")
 
 
-    os.makedirs(args.output_dir, exist_ok=True)
+    # image_alignment = sum(image_alignments) / len(image_alignments)
+    # text_alignment = sum(text_alignments) / len(text_alignments)
+    # image_std = np.std(image_alignments)
+    # text_std = np.std(text_alignments)
 
-    unique_token = "img"
-
-    prompt_subject_pairs = get_combinations(
-        unique_token, is_fastcomposer=True, split="eval"
-    )
-
-    reference_folder = args.test_reference_folder
-
-    for case_id, (prompt_list, subject) in enumerate(prompt_subject_pairs):
-        real_case_id = case_id + args.start_idx
-
-        reference_image_folder = os.path.join(reference_folder, subject)
-
-        # reference_image = PIL.Image.open(reference_image_path).convert("RGB")
-
-        for prompt_id, prompt in enumerate(prompt_list):
-            prompt_text_only = prompt.replace(unique_token, "")
-            controlnet_cond = {"c_concat": [control], "c_crossattn": [sampler.control_model.get_learned_conditioning([prompt_text_only])]}
-            n_prompt = "longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality"
-            controlnet_un_cond = {"c_concat": [control], "c_crossattn": [sampler.control_model.get_learned_conditioning([n_prompt])]}
-
-            # output_images = model(
-            #     prompt=prompt,
-            #     height=512,
-            #     width=512,
-            #     num_inference_steps=50,
-            #     guidance_scale=5.0,
-            #     num_images_per_prompt=args.num_images_per_prompt,
-            #     alpha_=0.5,
-            #     reference_subject_images=[reference_image],
-            # ).images
-
-            args.test_caption = prompt
-            args.test_reference_folder = reference_image_folder
-
-            images = sampler.combined_sampling(
-                cond=None,  # Will be set by FastComposer processing
-                controlnet_cond=controlnet_cond,
-                controlnet_un_cond=controlnet_un_cond,
-                shape=shape,
-                unconditional_guidance_scale=args.guidance_scale,
-                fastcomposer_args=args
-            )
-
-            for instance_id in range(args.num_images_per_prompt):
-                images[instance_id].save(
-                    os.path.join(
-                        args.output_dir,
-                        f"subject_{real_case_id:04d}_prompt_{prompt_id:04d}_instance_{instance_id:04d}.jpg",
-                    )
-                )
+      # print(f"Image Alignment: {image_alignment} +- {image_std}")
+      # print(f"Text Alignment: {text_alignment} +- {text_std}")
+      # with open(os.path.join(args.prediction_folder, "score.txt"), "w") as f:
+      #     f.write(f"Image Alignment: {image_alignment} Text Alignment: {text_alignment}")
+      #     f.write(f"Image Alignment Std: {image_std} Text Alignment Std: {text_std}")
 
 
 if __name__ == "__main__":
