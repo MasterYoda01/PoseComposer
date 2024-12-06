@@ -26,6 +26,7 @@ from fastcomposer.utils import parse_args
 from ControlNet.annotator.util import resize_image, HWC3
 from ControlNet.annotator.openpose import OpenposeDetector
 from ControlNet.cldm.model import create_model, load_state_dict
+from ControlNet.cldm.cldm import ControlLDM
 from ControlNet.cldm.ddim_hacked import DDIMSampler
 from ControlNet.ldm.modules.diffusionmodules.util import make_ddim_timesteps, make_ddim_sampling_parameters, noise_like, extract_into_tensor
 
@@ -55,9 +56,10 @@ def stable_diffusion_call_control_and_fastcomposer(
     callback_steps: int = 1,
     cross_attention_kwargs: Optional[Dict[str, Any]] = None,
     start_merge_step = 0,
-    controlnet_model: Optional[DDIMSampler] = None,
+    controlnet_model: Optional[ControlLDM] = None,
     controlnet_cond = None,
-    controlnet_uncond = None
+    controlnet_uncond = None,
+    control_scales = [1.0] * 13
 ):
     # 0. Default height and width to unet
     height = height or self.unet.config.sample_size * self.vae_scale_factor
@@ -89,8 +91,7 @@ def stable_diffusion_call_control_and_fastcomposer(
 
     prompt_embeds = torch.cat([prompt_embeds, prompt_embeds_text_only], dim=0)     
 
-    # 3. Create schedule based on the DDIMSampler
-    #control_net_model.make_schedule(ddim_num_steps=num_inference_steps, ddim_eta=eta, verbose=False) 
+    # Create schedule
     self.scheduler.set_timesteps(num_inference_steps, device=device)
     timesteps = self.scheduler.timesteps
 
@@ -136,13 +137,17 @@ def stable_diffusion_call_control_and_fastcomposer(
 
             control_t = torch.full((batch_size,), t, device=device, dtype=torch.long)
             # Get the controlNet preds
-            mid_resid, down_resids = controlnet_model.model.apply_model(
-                latent_model_input[1:].float(),
-                control_t,
-                controlnet_cond,
-                encoder_hidden_states=current_prompt_embeds,
-                cross_attention_kwargs=cross_attention_kwargs,
+            all_controls = controlnet_model(
+                x=latent_model_input[1:].float(),
+                hint=torch.cat(controlnet_cond['c_concat'], 1),
+                timesteps=control_t,
+                context=torch.cat(controlnet_cond['c_crossattn'], 1),
             )
+            all_controls = [c * scale for c, scale in zip(all_controls, control_scales)]
+
+            mid_resid = all_controls.pop()
+            control_range = len(all_controls)
+            down_resids = reversed([all_controls.pop() for i in range(control_range)])
 
             mid_resid = mid_resid.half()
             down_resids = [d.half() for d in down_resids]
@@ -221,16 +226,23 @@ def stable_diffusion_call_control_and_fastcomposer(
 
 class CombinedSampler:
     def __init__(self, control_model_path, control_state_dict_path, schedule="linear", **kwargs):
-        self.control_model = create_model(control_model_path)
-        self.control_model.load_state_dict(load_state_dict(control_state_dict_path, location='cpu'))
-        self.control_model = self.control_model.cuda()
-        self.ddim_sampler = DDIMSampler(self.control_model)
+        full_control_model = create_model(control_model_path)
+        full_control_model.load_state_dict(load_state_dict(control_state_dict_path, location='cpu'))
+        self.control_condition_model = full_control_model.control_model
+        self.control_condition_model = self.control_condition_model.cuda()
+        self.cond_stage_model = full_control_model.cond_stage_model.cuda()
         self.schedule = schedule
+
+        sampler = DDIMSampler(full_control_model)
+        self.base_timesteps = sampler.ddpm_num_timesteps
+
+    def get_learned_conditioning(self, c):
+        return self.cond_stage_model.encode(c)
 
     def setup_fastcomposer(self, args, accelerator, weight_dtype):
         """Initialize FastComposer pipeline"""
         pipe = StableDiffusionPipeline.from_pretrained(
-            args.pretrained_model_name_or_path, 
+                args.pretrained_model_name_or_path, 
             torch_dtype=weight_dtype
         )
 
@@ -292,7 +304,7 @@ class CombinedSampler:
             img = x_T
 
         if timesteps is None:
-            timesteps = self.ddim_sampler.ddpm_num_timesteps 
+            timesteps = self.base_timesteps
 
         # Setup FastComposer condition
         if fastcomposer_args is not None:
@@ -367,7 +379,7 @@ class CombinedSampler:
             #eta,
             #fastcomposer_args.generator,
             guidance_scale=fastcomposer_args.guidance_scale,
-            controlnet_model = self.ddim_sampler,
+            controlnet_model = self.control_condition_model,
             controlnet_cond = controlnet_cond,
             controlnet_uncond = controlnet_un_cond,
             start_merge_step = fastcomposer_args.start_merge_step,
@@ -426,14 +438,12 @@ def main():
     unique_token = "<|image|>"
     prompt = args.test_caption
     prompt_text_only = prompt.replace(unique_token, "")
-    controlnet_cond = {"c_concat": [control], "c_crossattn": [sampler.control_model.get_learned_conditioning([prompt_text_only])]}
+    controlnet_cond = {"c_concat": [control], "c_crossattn": [sampler.get_learned_conditioning([prompt_text_only])]}
     n_prompt = "longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality"
-    controlnet_un_cond = {"c_concat": [control], "c_crossattn": [sampler.control_model.get_learned_conditioning([n_prompt])]}
+    controlnet_un_cond = {"c_concat": [control], "c_crossattn": [sampler.get_learned_conditioning([n_prompt])]}
 
     shape = (1, 4, 512, 512)  # Your desired shape
 
-    strength = 1.0
-    sampler.control_model.control_scales = [strength] * 13
 
     # Run combined sampling
     images = sampler.combined_sampling(
