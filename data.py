@@ -5,6 +5,7 @@ from PIL import Image
 import torch
 from torch.utils.data import Dataset
 import einops
+from torchvision.io import read_image
 
 from ControlNet.annotator.util import resize_image, HWC3
 from ControlNet.annotator.openpose import OpenposeDetector
@@ -77,8 +78,43 @@ class IdentityPoseDataset(Dataset):
 
         return image, detected_map, pose_condition, pose_uncond, identity_condition
 
+def prepare_image_token_idx(image_token_mask, max_num_objects):
+    image_token_idx = torch.nonzero(image_token_mask, as_tuple=True)[1]
+    image_token_idx_mask = torch.ones_like(image_token_idx, dtype=torch.bool)
+    if len(image_token_idx) < max_num_objects:
+        image_token_idx = torch.cat(
+            [
+                image_token_idx,
+                torch.zeros(max_num_objects - len(image_token_idx), dtype=torch.long),
+            ]
+        )
+        image_token_idx_mask = torch.cat(
+            [
+                image_token_idx_mask,
+                torch.zeros(
+                    max_num_objects - len(image_token_idx_mask),
+                    dtype=torch.bool,
+                ),
+            ]
+        )
+
+        image_token_idx = image_token_idx.unsqueeze(0)
+        image_token_idx_mask = image_token_idx_mask.unsqueez(0)
+        return image_token_idx, image_token_idx_mask
+
 class PreppedIdentityPoseDataset(Dataset):
-    def __init__(self, ref_dir, pose_dir, ident_dir, prompt_path, device):
+    def __init__(
+            self, 
+            ref_dir, 
+            pose_dir, 
+            ident_dir, 
+            prompt_path, 
+            device,
+            tokenizer=None,
+            object_transforms=None,
+            max_num_objects = 1,
+
+        ):
         self.ref_paths = list(Path(ref_dir).glob('*.jpg'))
         self.pose_paths = list(Path(pose_dir).glob('*.jpg'))
         self.ident_paths = list(Path(ident_dir).glob('*.jpg'))
@@ -86,17 +122,89 @@ class PreppedIdentityPoseDataset(Dataset):
             self.prompts = [line.strip() for line in f]
 
         assert(len(self.ref_paths) == len(self.pose_paths) == len(self.ident_paths))
-
+        
         self.device = device
+
+        assert(tokenizer is not None)
+
+        self.tokenizer = tokenizer
+        self.tokenizer.add_tokens(['<|image|>'], special_tokens=True)
+        self.image_token_id = tokenizer.convert_tokens_to_ids('<|image|>')
+
+        assert(object_transformes is not None)
+
+        self.object_transforms = object_transforms
+        self.max_num_objects = max_num_objects
 
     def __len__(self):
         return len(self.ref_paths)
+    
+    def _tokenize_and_mask_noun_phrases_ends(self, caption):
+        input_ids = self.tokenizer.encode(caption)
+
+        noun_phrase_end_mask = [False for _ in input_ids]
+        clean_input_ids = []
+        clean_index = 0
+
+        for i, id in enumerate(input_ids):
+            if id  == self.image_token_id:
+                noun_phrase_end_mask[clean_index - 1] = True
+            else:
+                clean_input_ids.append(id)
+                clean_index += 1
+
+        max_len = self.tokenizer.model_max_length
+
+        if len(clean_input_ids) > max_len:
+            clean_input_ids = clean_input_ids[:max_len]
+        else:
+            clean_input_ids = clean_input_ids + [self.tokenizer.pad_token_id] * (
+                max_len - len(clean_input_ids)
+            )
+
+        if len(noun_phrase_end_mask) > max_len:
+            noun_phrase_end_mask = noun_phrase_end_mask[:max_len]
+        else:
+            noun_phrase_end_mask = noun_phrase_end_mask + [False] * (
+                max_len - len(noun_phrase_end_mask)
+            )
+
+        clean_input_ids = torch.tensor(clean_input_ids, dtype=torch.long)
+        noun_phrase_end_mask = torch.tensor(noun_phrase_end_mask, dtype=torch.bool)
+        return clean_input_ids.unsqueeze(0), noun_phrase_end_mask.unsqueeze(0)
 
     def __getitem__(self, idx):
         prompt = self.prompts[idx]
         ref = np.array(Image.open(self.ref_paths[idx]))
         pose = np.array(Image.open(self.pose_paths[idx]))
-        ident = np.array(Image.open(self.ident_paths[idx]))
+        ident = read_image(self.ident_paths[idx])
+
+        object_pixel_values = [self.object_transform(ident)]
+        image_ids = ["ident"]
+
+        input_ids = self._tokenize_and_mask_noun_phrases_ends(prompt)
+        image_token_idx, image_token_idx_mask = prepare_image_token_idx(
+            image_token_mask, self.max_num_objects
+        )
+
+        num_objects = image_token_idx_mask.sum().item()
+
+        object_pixel_values = torch.stack(
+            object_pixel_values
+        )
+        object_pixel_values = object_pixel_values.to(
+            memory_format=torch.contiguous_format
+        ).float()
+
+        fc_args = {
+            "input_ids": input_ids,
+            "image_token_mask": image_token_mask,
+            "image_token_idx": image_token_idx,
+            "image_token_idx_mask": image_token_idx_mask,
+            "object_pixel_values": object_pixel_values,
+            "num_objects": torch.tensor(num_objects),
+            "filenames": image_ids
+        }
         
         control = torch.from_numpy(pose.copy()).float().to(self.device) / 255.0
         num_samples = 1 # only using single object
@@ -106,7 +214,7 @@ class PreppedIdentityPoseDataset(Dataset):
         control_cond = {"c_concat": [control], "c_crossattn": []}
         control_uncond = {"c_concat": [control], "c_crossattn": []}
 
-        return prompt, torch.Tensor(ref), control_cond, control_uncond, torch.Tensor(ident)
+        return prompt, fc_args, torch.Tensor(ref), control_cond, control_uncond, torch.Tensor(ident)
 
 
 # Preview some samples
@@ -138,5 +246,4 @@ def prep_data():
             pass
 
 if __name__ == "__main__":
-    prepped_dataset = PreppedIdentityPoseDataset("./prepped_idents/refs", "./prepped_idents/poses", "./prepped_idents/idents", 'cpu')
-    print(f"{len(prepped_dataset)=}")
+    prep_data()

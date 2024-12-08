@@ -267,6 +267,13 @@ class CombinedSampler:
         del model
         
         self.fastcomposer_pipe = pipe.to(accelerator.device)
+        self.fc_tokenizer = CLIPTokenizer.from_pretrained(
+            args.pretrained_model_name_or_path,
+            subfolder="tokenizer",
+            revision=args.revision
+        )
+        self.object_transforms = get_object_transforms(args)
+        
         return pipe
 
     @torch.no_grad()
@@ -294,7 +301,15 @@ class CombinedSampler:
         dynamic_threshold=None,
         ucg_schedule=None,
         fastcomposer_args=None,
-        device='cuda'
+        return_dict=True,
+        device='cuda',
+        is_demo=True,
+        input_ids=None,
+        image_token_mask=None,
+        all_object_pixel_values=None,
+        num_objects=None,
+        prompt=None
+        num_images_per_prompt=1
     ):
         """Combined sampling using both FastComposer and ControlNet"""
         # Initialize noise
@@ -308,32 +323,27 @@ class CombinedSampler:
 
         # Setup FastComposer condition
         if fastcomposer_args is not None:
-            tokenizer = CLIPTokenizer.from_pretrained(
-                fastcomposer_args.pretrained_model_name_or_path,
-                subfolder="tokenizer",
-                revision=fastcomposer_args.revision,
-            )
-            object_transforms = get_object_transforms(fastcomposer_args)
-            demo_dataset = DemoDataset(
-                test_caption=fastcomposer_args.test_caption,
-                test_reference_folder=fastcomposer_args.test_reference_folder,
-                tokenizer=tokenizer,
-                object_transforms=object_transforms,
-                device=device,
-                max_num_objects=fastcomposer_args.max_num_objects,
-            )
-            image_ids = os.listdir(fastcomposer_args.test_reference_folder)
-            print(f"Image IDs: {image_ids}")
-            demo_dataset.set_image_ids(image_ids)
+            if is_demo:
+                demo_dataset = DemoDataset(
+                    test_caption=fastcomposer_args.test_caption,
+                    test_reference_folder=fastcomposer_args.test_reference_folder,
+                    tokenizer=self.tokenizer,
+                    object_transforms=self.object_transforms,
+                    device=device,
+                    max_num_objects=fastcomposer_args.max_num_objects,
+                )
+                image_ids = os.listdir(fastcomposer_args.test_reference_folder)
+                print(f"Image IDs: {image_ids}")
+                demo_dataset.set_image_ids(image_ids)
 
-            batch = demo_dataset.get_data()
-            print(f"\n\n\n{batch=}\n\n\n")
-            
-            # Process FastComposer inputs
-            input_ids = batch["input_ids"].to(device)
-            image_token_mask = batch["image_token_mask"].to(device)
-            all_object_pixel_values = batch["object_pixel_values"].unsqueeze(0).to(device)
-            num_objects = batch["num_objects"].unsqueeze(0).to(device)
+                batch = demo_dataset.get_data()
+                print(f"\n\n\n{batch=}\n\n\n")
+                
+                # Process FastComposer inputs
+                input_ids = batch["input_ids"].to(device)
+                image_token_mask = batch["image_token_mask"].to(device)
+                all_object_pixel_values = batch["object_pixel_values"].unsqueeze(0).to(device)
+                num_objects = batch["num_objects"].unsqueeze(0).to(device)
             
             # Get FastComposer embeddings
             if self.fastcomposer_pipe.image_encoder is not None:
@@ -347,13 +357,13 @@ class CombinedSampler:
 
             unique_token = "<|image|>"
 
-            prompt = fastcomposer_args.test_caption
+            prompt = fastcomposer_args.test_caption if prompt is None else prompt
             prompt_text_only = prompt.replace(unique_token, "")
 
             encoder_hidden_states_text_only = self.fastcomposer_pipe._encode_prompt(
                 prompt_text_only, 
                 device,
-                fastcomposer_args.num_images_per_prompt,
+                num_images_per_prompt,
                 do_classifier_free_guidance=False,
             )
             
@@ -367,17 +377,36 @@ class CombinedSampler:
 
         intermediates = {'x_inter': [img], 'pred_x0': [img]}
         time_range = reversed(range(0,timesteps)) 
-        total_steps = fastcomposer_args.inference_steps 
-        
-        images = self.fastcomposer_pipe.inference(
+        total_steps = 50 
+       
+        if return_dict:
+            images = self.fastcomposer_pipe.inference(
+                prompt_text_only,
+                shape[2],
+                shape[3],
+                shape[1],
+                total_steps,
+                num_images_per_prompt=num_images_per_prompt,
+                #eta,
+                #fastcomposer_args.generator,
+                guidance_scale=5,
+                controlnet_model = self.control_condition_model,
+                controlnet_cond = controlnet_cond,
+                controlnet_uncond = controlnet_un_cond,
+                start_merge_step = 10,
+                prompt_embeds = encoder_hidden_states,
+                prompt_embeds_text_only = encoder_hidden_states_text_only
+            )
+
+            return images['images']
+
+        images, _ self.fastcomposer_pipe.inference(
             prompt_text_only,
             shape[2],
             shape[3],
             shape[1],
             total_steps,
             num_images_per_prompt=fastcomposer_args.num_images_per_prompt,
-            #eta,
-            #fastcomposer_args.generator,
             guidance_scale=fastcomposer_args.guidance_scale,
             controlnet_model = self.control_condition_model,
             controlnet_cond = controlnet_cond,
@@ -387,8 +416,7 @@ class CombinedSampler:
             prompt_embeds_text_only = encoder_hidden_states_text_only
         )
 
-        return images['images']
-
+        return images
 
 @torch.no_grad()
 def main():
