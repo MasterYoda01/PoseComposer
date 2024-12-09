@@ -98,9 +98,9 @@ def prepare_image_token_idx(image_token_mask, max_num_objects):
             ]
         )
 
-        image_token_idx = image_token_idx.unsqueeze(0)
-        image_token_idx_mask = image_token_idx_mask.unsqueez(0)
-        return image_token_idx, image_token_idx_mask
+    image_token_idx = image_token_idx.unsqueeze(0)
+    image_token_idx_mask = image_token_idx_mask.unsqueeze(0)
+    return image_token_idx, image_token_idx_mask
 
 class PreppedIdentityPoseDataset(Dataset):
     def __init__(
@@ -131,7 +131,7 @@ class PreppedIdentityPoseDataset(Dataset):
         self.tokenizer.add_tokens(['<|image|>'], special_tokens=True)
         self.image_token_id = tokenizer.convert_tokens_to_ids('<|image|>')
 
-        assert(object_transformes is not None)
+        assert(object_transforms is not None)
 
         self.object_transforms = object_transforms
         self.max_num_objects = max_num_objects
@@ -179,10 +179,10 @@ class PreppedIdentityPoseDataset(Dataset):
         pose = np.array(Image.open(self.pose_paths[idx]))
         ident = read_image(self.ident_paths[idx])
 
-        object_pixel_values = [self.object_transform(ident)]
+        object_pixel_values = [self.object_transforms(ident)]
         image_ids = ["ident"]
 
-        input_ids = self._tokenize_and_mask_noun_phrases_ends(prompt)
+        input_ids, image_token_mask = self._tokenize_and_mask_noun_phrases_ends(prompt)
         image_token_idx, image_token_idx_mask = prepare_image_token_idx(
             image_token_mask, self.max_num_objects
         )

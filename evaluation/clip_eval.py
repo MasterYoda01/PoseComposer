@@ -18,11 +18,9 @@ class CLIPEvaluator(object):
     def tokenize(self, strings: list):
         return clip.tokenize(strings).to(self.device)
 
-    @torch.no_grad()
     def encode_text(self, tokens: list) -> torch.Tensor:
         return self.model.encode_text(tokens)
 
-    @torch.no_grad()
     def encode_images(self, images: torch.Tensor) -> torch.Tensor:
         images = self.preprocess(images).to(self.device)
         return self.model.encode_image(images)

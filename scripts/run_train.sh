@@ -1,14 +1,11 @@
-CAPTION="a man <|image|> is reading a book"
-DEMO_NAME="lib_testing"
-
 CUDA_VISIBLE_DEVICES=1 accelerate launch \
     --mixed_precision=fp16 \
-    knit.py \
+    train.py \
     --pretrained_model_name_or_path runwayml/stable-diffusion-v1-5 \
     --finetuned_model_path model/fastcomposer \
     --test_reference_folder data/single_test \
-    --test_caption "${CAPTION}" \
-    --output_dir outputs/${DEMO_NAME} \
+    --test_caption "This is a test" \
+    --output_dir outputs\training_out \
     --mixed_precision fp16 \
     --image_encoder_type clip \
     --image_encoder_name_or_path openai/clip-vit-large-patch14 \
@@ -21,6 +18,6 @@ CUDA_VISIBLE_DEVICES=1 accelerate launch \
     --num_rows 1 \
     --seed 42 \
     --guidance_scale 5 \
-    --inference_steps 100 \
+    --inference_steps 50 \
     --start_merge_step 10 \
     --no_object_augmentation

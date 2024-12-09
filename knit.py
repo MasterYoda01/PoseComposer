@@ -33,7 +33,6 @@ from ControlNet.ldm.modules.diffusionmodules.util import make_ddim_timesteps, ma
 apply_openpose = OpenposeDetector()
 
 
-@torch.no_grad()
 def stable_diffusion_call_control_and_fastcomposer(
     self,
     prompt: Union[str, List[str]] = None,
@@ -201,11 +200,15 @@ def stable_diffusion_call_control_and_fastcomposer(
         #)
 
         # 10. Convert to PIL
-        image = self.numpy_to_pil(image)
+        #image = self.numpy_to_pil(image)
     else:
         # 8. Post-processing
-        image = self.decode_latents(latents)
+        latents = 1 / self.vae.config.scaling_factor * latents
+        image = self.vae.decode(latents, return_dict=False)[0]
+        image = (image / 2 + 0.5).clamp(0, 1)
+        image = image[0].float() * 255.0
 
+        return image, None
         # 9. Run safety checker
         #image, has_nsfw_concept = self.run_safety_checker(
         #    image, device, prompt_embeds.dtype
@@ -217,7 +220,7 @@ def stable_diffusion_call_control_and_fastcomposer(
 
     has_nsfw_concept = False
     if not return_dict:
-        return (image, has_nsfw_concept)
+        return (image, latents)
 
     return StableDiffusionPipelineOutput(
         images=image, nsfw_content_detected=has_nsfw_concept
@@ -251,7 +254,6 @@ class CombinedSampler:
             torch.load(Path(args.finetuned_model_path) / "pytorch_model.bin", map_location="cpu")
         )
         model = model.to(device=accelerator.device, dtype=weight_dtype)                                                                                                                           
-        print(f"\n\n\n{model.unet=}\n\n\n")
         pipe.unet = model.unet
         if args.enable_xformers_memory_efficient_attention:
             pipe.unet.enable_xformers_memory_efficient_attention()
@@ -308,7 +310,7 @@ class CombinedSampler:
         image_token_mask=None,
         all_object_pixel_values=None,
         num_objects=None,
-        prompt=None
+        prompt=None,
         num_images_per_prompt=1
     ):
         """Combined sampling using both FastComposer and ControlNet"""
@@ -327,7 +329,7 @@ class CombinedSampler:
                 demo_dataset = DemoDataset(
                     test_caption=fastcomposer_args.test_caption,
                     test_reference_folder=fastcomposer_args.test_reference_folder,
-                    tokenizer=self.tokenizer,
+                    tokenizer=self.fc_tokenizer,
                     object_transforms=self.object_transforms,
                     device=device,
                     max_num_objects=fastcomposer_args.max_num_objects,
@@ -345,40 +347,44 @@ class CombinedSampler:
                 all_object_pixel_values = batch["object_pixel_values"].unsqueeze(0).to(device)
                 num_objects = batch["num_objects"].unsqueeze(0).to(device)
             
-            # Get FastComposer embeddings
-            if self.fastcomposer_pipe.image_encoder is not None:
-                object_embeds = self.fastcomposer_pipe.image_encoder(all_object_pixel_values.half())
-            else:
-                object_embeds = None
+        # Get FastComposer embeddings
+        if self.fastcomposer_pipe.image_encoder is not None:
+            object_embeds = self.fastcomposer_pipe.image_encoder(all_object_pixel_values.half())
+        else:
+            object_embeds = None
             
-            encoder_hidden_states = self.fastcomposer_pipe.text_encoder(
-                input_ids, image_token_mask, object_embeds, num_objects
-            )[0]
-
-            unique_token = "<|image|>"
-
-            prompt = fastcomposer_args.test_caption if prompt is None else prompt
-            prompt_text_only = prompt.replace(unique_token, "")
-
-            encoder_hidden_states_text_only = self.fastcomposer_pipe._encode_prompt(
-                prompt_text_only, 
-                device,
-                num_images_per_prompt,
-                do_classifier_free_guidance=False,
-            )
-            
-            # Process combined conditioning
-            cond = self.fastcomposer_pipe.postfuse_module(
-                encoder_hidden_states,
-                object_embeds,
-                image_token_mask,
-                num_objects,
-            )
-
         intermediates = {'x_inter': [img], 'pred_x0': [img]}
         time_range = reversed(range(0,timesteps)) 
         total_steps = 50 
-       
+            
+        unique_token = "<|image|>"
+
+        
+        if fastcomposer_args is not None:
+            prompt = fastcomposer_args.test_caption 
+        prompt_text_only = prompt.replace(unique_token, "")
+        
+        encoder_hidden_states = self.fastcomposer_pipe.text_encoder(
+            input_ids, image_token_mask, object_embeds, num_objects
+        )[0]
+
+        encoder_hidden_states_text_only = self.fastcomposer_pipe._encode_prompt(
+            prompt_text_only, 
+            device,
+            num_images_per_prompt,
+            do_classifier_free_guidance=False,
+        )
+        
+        # Process combined conditioning
+        cond = self.fastcomposer_pipe.postfuse_module(
+            encoder_hidden_states,
+            object_embeds,
+            image_token_mask,
+            num_objects,
+        )
+
+        intermediates = {'x_inter': [img], 'pred_x0': [img]}
+      
         if return_dict:
             images = self.fastcomposer_pipe.inference(
                 prompt_text_only,
@@ -400,20 +406,23 @@ class CombinedSampler:
 
             return images['images']
 
-        images, _ self.fastcomposer_pipe.inference(
+        print(f"\n\n\n{type(self.fastcomposer_pipe)=}\n\n\n")
+
+        images, _ = self.fastcomposer_pipe.inference(
             prompt_text_only,
             shape[2],
             shape[3],
             shape[1],
             total_steps,
-            num_images_per_prompt=fastcomposer_args.num_images_per_prompt,
-            guidance_scale=fastcomposer_args.guidance_scale,
+            num_images_per_prompt=1,
+            guidance_scale=5,
             controlnet_model = self.control_condition_model,
             controlnet_cond = controlnet_cond,
             controlnet_uncond = controlnet_un_cond,
-            start_merge_step = fastcomposer_args.start_merge_step,
+            start_merge_step = 10,
             prompt_embeds = encoder_hidden_states,
-            prompt_embeds_text_only = encoder_hidden_states_text_only
+            prompt_embeds_text_only = encoder_hidden_states_text_only,
+            output_type="torch"
         )
 
         return images

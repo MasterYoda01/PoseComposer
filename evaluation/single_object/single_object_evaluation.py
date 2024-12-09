@@ -61,19 +61,21 @@ def compute_average_similarity(
     idx, face_detector, face_similarity, generated_image, reference_image
 ) -> float:
     generated_face = face_detector(generated_image)
+    print(f"{generated_face=}")
 
-    if generated_face == None:
-        return 0.0
-    generated_face = generated_face[:1]
+    if generated_face[0] == None:
+        return torch.Tensor([0.0]).to(face_detector.device)
+    generated_face = generated_face[0]
+    print(f"{generated_face=}")
 
     reference_face = face_detector(reference_image)[:1]
     assert len(reference_face) == 1, "no reference face detected in reference image"
 
     generated_face = generated_face.to(face_detector.device).reshape(1, 3, 160, 160)
-    reference_face = reference_face.to(face_detector.device).reshape(1, 3, 160, 160)
+    reference_face = reference_face[0].to(face_detector.device).reshape(1, 3, 160, 160)
 
     similarity = face_similarity(generated_face) @ face_similarity(reference_face).T
-    return max(similarity.item(), 0.0)
+    return max(similarity, torch.Tensor([0.0]).to(face_detector.device))
 
 
 def parse_args():
