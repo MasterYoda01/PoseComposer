@@ -1,0 +1,40 @@
+0 a man <|image|> wearing a red hat
+1 a man <|image|> wearing a santa hat
+2 a man <|image|> wearing a rainbow scarf
+3 a man <|image|> wearing a black top hat and a monocle
+4 a man <|image|> in a chef outfit
+5 a man <|image|> in a firefighter outfit
+6 a man <|image|> in a police outfit
+7 a man <|image|> wearing pink glasses
+8 a man <|image|> wearing a yellow shirt
+9 a man <|image|> in a purple wizard outfit
+10 a painting of a man <|image|> in the style of Banksy
+11 a painting of a man <|image|> in the style of Vincent Van Gogh
+12 a colorful graffiti painting of a man <|image|>
+13 a watercolor painting of a man <|image|>
+14 a Greek marble sculpture of a man <|image|>
+15 a street art mural of a man <|image|>
+16 a black and white photograph of a man <|image|>
+17 a pointillism painting of a man <|image|>
+18 a Japanese woodblock print of a man <|image|>
+19 a street art stencil of a man <|image|>
+20 a man <|image|> riding a horse
+21 a man <|image|> holding a glass of wine
+22 a man <|image|> holding a piece of cake
+23 a man <|image|> giving a lecture
+24 a man <|image|> reading a book
+25 a man <|image|> gardening in the backyard
+26 a man <|image|> cooking a meal
+27 a man <|image|> working out at the gym
+28 a man <|image|> walking the dog
+29 a man <|image|> baking cookies
+30 a man <|image|> in the jungle
+31 a man <|image|> in the snow
+32 a man <|image|> on the beach
+33 a man <|image|> on a cobblestone street
+34 a man <|image|> on top of pink fabric
+35 a man <|image|> on top of a wooden floor
+36 a man <|image|> with a city in the background
+37 a man <|image|> with a mountain in the background
+38 a man <|image|> with a blue house in the background
+39 a man <|image|> on top of a purple rug in a forest
