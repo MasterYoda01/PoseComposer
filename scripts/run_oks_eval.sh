@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Define variables for inputs
-GROUND_TRUTH_FOLDER="poses"   # Folder containing ground truth pose PNG images
+GROUND_TRUTH_FOLDER="poses_json"   # Folder containing ground truth pose PNG images
 GENERATED_IMAGES_FOLDER="generated_images"  # Folder containing generated images
 OUTPUT_FILE="oks_results.txt"  # File to save the OKS scores
 
