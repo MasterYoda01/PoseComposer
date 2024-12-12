@@ -81,7 +81,8 @@ def recalibrate_control(
             train_loss += loss.item()
 
         avg_train_loss = train_loss / len(train_loader)
-        history['train_loss'].append(avg_train_loss)
+
+        torch.save(sampler.control_condition_model, f'calibrated_control_model_epoch_{epoch}.pth')
 
 
 if __name__ == "__main__":

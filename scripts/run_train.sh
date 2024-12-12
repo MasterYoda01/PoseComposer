@@ -1,4 +1,4 @@
-CUDA_VISIBLE_DEVICES=1 accelerate launch \
+CUDA_VISIBLE_DEVICES=4 accelerate launch \
     --mixed_precision=fp16 \
     train.py \
     --pretrained_model_name_or_path runwayml/stable-diffusion-v1-5 \
