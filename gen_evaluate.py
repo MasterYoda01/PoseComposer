@@ -91,13 +91,10 @@ def main():
         for prompt_id, prompt in enumerate(prompt_list):
             print(prompt_id, prompt)
 
-            condition_image_path = os.path.join(args.poses, str(prompt_id)+".jpg")
-            condition_image = HWC3(np.array(Image.open(condition_image_path).convert("RGB")))
-            detected_map, _ = apply_openpose(resize_image(condition_image, 512))
-            detected_map = HWC3(detected_map)
+            detected_map = os.path.join(args.poses, str(prompt_id)+".png")
+            detected_map = HWC3(np.array(Image.open(detected_map).convert("RGB")))
 
             detected_map = cv2.resize(detected_map, (512, 512), interpolation=cv2.INTER_NEAREST)
-
             num_samples = 1
             control = torch.from_numpy(detected_map.copy()).float().cuda() / 255.0
             control = torch.stack([control for _ in range(num_samples)], dim=0)
