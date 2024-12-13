@@ -1,0 +1,1 @@
+Image Alignment: 0.5707118674653812 Text Alignment: 0.2345642974411232Image Alignment Std: 0.18532397256262584 Text Alignment Std: 0.0337063585510048

@@ -131,21 +131,24 @@ def main():
                     args.prediction_folder,
                     f"subject_{case_id:04d}_prompt_{prompt_id:04d}_instance_{instance_id:04d}.jpg",
                 )
-                generated_image = Image.open(generated_image_path).convert("RGB")
+                try:
+                    generated_image = Image.open(generated_image_path).convert("RGB")
 
-                identity_similarity = compute_average_similarity(
-                    case_id, face_detector, face_similarity, generated_image, ref_image
-                )
+                    identity_similarity = compute_average_similarity(
+                        case_id, face_detector, face_similarity, generated_image, ref_image
+                    )
 
-                generated_image_tensor = (
-                    ToTensor()(generated_image).unsqueeze(0) * 2.0 - 1.0
-                )
-                prompt_similarity = text_evaluator.txt_to_img_similarity(
-                    prompt, generated_image_tensor
-                )
+                    generated_image_tensor = (
+                        ToTensor()(generated_image).unsqueeze(0) * 2.0 - 1.0
+                    )
+                    prompt_similarity = text_evaluator.txt_to_img_similarity(
+                        prompt, generated_image_tensor
+                    )
 
-                image_alignments.append(float(identity_similarity))
-                text_alignments.append(float(prompt_similarity))
+                    image_alignments.append(float(identity_similarity))
+                    text_alignments.append(float(prompt_similarity))
+                except FileNotFoundError:
+                    pass
 
     image_alignment = sum(image_alignments) / len(image_alignments)
     text_alignment = sum(text_alignments) / len(text_alignments)

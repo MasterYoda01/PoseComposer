@@ -117,8 +117,8 @@ def get_combinations(unique_token, is_fastcomposer=False, split="eval"):
             all_prompts = (
                 get_accessory_prompts(unique_token, class_token)
                 + get_style_prompts(unique_token, class_token)
-                + get_action_prompts(unique_token, class_token)
-                + get_context_prompts(unique_token, class_token)
+                #+ get_action_prompts(unique_token, class_token)
+                #+ get_context_prompts(unique_token, class_token)
             )
         else:
             all_prompts = (
