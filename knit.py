@@ -517,7 +517,7 @@ def main():
     sampler.setup_fastcomposer(args, accelerator, weight_dtype)
 
     # Prepare your conditions here
-    condition_image_path = "./images/poses/wine_pose.jpg"
+    condition_image_path = "./data/dab_pose.jpg"
     condition_image = HWC3(np.array(Image.open(condition_image_path)))
     detected_map, _ = apply_openpose(resize_image(condition_image, 512))
     detected_map = HWC3(detected_map)

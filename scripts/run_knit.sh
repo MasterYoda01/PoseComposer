@@ -1,12 +1,12 @@
-CAPTION="a man <|image|> doing yoga"
-DEMO_NAME="einstein"
+CAPTION="a man <|image|> is reading a book"
+DEMO_NAME="lib_testing"
 
-CUDA_VISIBLE_DEVICES=0 accelerate launch \
+CUDA_VISIBLE_DEVICES=2 accelerate launch \
     --mixed_precision=fp16 \
     knit.py \
     --pretrained_model_name_or_path runwayml/stable-diffusion-v1-5 \
     --finetuned_model_path model/fastcomposer \
-    --test_reference_folder data/einstein \
+    --test_reference_folder data/single_test \
     --test_caption "${CAPTION}" \
     --output_dir outputs/${DEMO_NAME} \
     --mixed_precision fp16 \
