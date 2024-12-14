@@ -138,7 +138,7 @@ for gt_json_file in tqdm(sorted(os.listdir(ground_truth_folder))):
         continue
 
     # Corresponding predicted image
-    image_file = os.path.join(generated_images_folder, f"{Path(gt_json_file).stem}.png")
+    image_file = os.path.join(generated_images_folder, f"{Path(gt_json_file).stem}.jpg")
     if not os.path.exists(image_file):
         print(f"Generated image not found for {gt_json_file}")
         continue
