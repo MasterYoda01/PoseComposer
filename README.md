@@ -29,6 +29,8 @@ wget https://huggingface.co/mit-han-lab/fastcomposer/resolve/main/pytorch_model.
 cd ../../ControlNet/annotator/ckpts
 wget https://huggingface.co/lllyasviel/ControlNet/resolve/main/annotator/ckpts/body_pose_model.pth?download=true
 wget https://huggingface.co/lllyasviel/ControlNet/resolve/main/annotator/ckpts/hand_pose_model.pth?download=true
+cd ../../models
+wget https://huggingface.co/lllyasviel/ControlNet/resolve/main/models/control_sd15_openpose.pth
 ```
 
 ### Knitted FastComposer and ControlNet Inference
