@@ -36,6 +36,12 @@ def parse_args(default=False):
     )
 
     parser.add_argument(
+        "--poses",
+        type=str,
+        help="Folder containing poses labeled to match prompt_id.",
+    )
+
+    parser.add_argument(
         "--dataset_config_name",
         type=str,
         default=None,

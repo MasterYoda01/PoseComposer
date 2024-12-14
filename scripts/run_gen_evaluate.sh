@@ -1,0 +1,23 @@
+CUDA_VISIBLE_DEVICES=0 accelerate launch \
+    --mixed_precision=fp16 \
+    gen_evaluate.py \
+    --pretrained_model_name_or_path runwayml/stable-diffusion-v1-5 \
+    --finetuned_model_path model/fastcomposer \
+    --test_reference_folder data/celeba_images \
+    --poses data/celeba_poses \
+    --output_dir outputs/evaluate_new \
+    --mixed_precision fp16 \
+    --image_encoder_type clip \
+    --image_encoder_name_or_path openai/clip-vit-large-patch14 \
+    --num_image_tokens 1 \
+    --max_num_objects 1 \
+    --object_resolution 224 \
+    --generate_height 512 \
+    --generate_width 512 \
+    --num_images_per_prompt 1 \
+    --num_rows 1 \
+    --seed 42 \
+    --guidance_scale 5 \
+    --inference_steps 100 \
+    --start_merge_step 10 \
+    --no_object_augmentation
