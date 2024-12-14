@@ -2,7 +2,7 @@
 
 # Define variables for inputs
 GROUND_TRUTH_FOLDER="poses_json"   # Folder containing ground truth pose PNG images
-GENERATED_IMAGES_FOLDER="generated_images"  # Folder containing generated images
+GENERATED_IMAGES_FOLDER="generated_images_new"  # Folder containing generated images
 OUTPUT_FILE="oks_results.txt"  # File to save the OKS scores
 
 # Run the OKS evaluation Python script

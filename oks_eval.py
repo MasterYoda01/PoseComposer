@@ -23,7 +23,7 @@ sigmas = np.array([
 
 # Paths
 ground_truth_folder = "poses_json"  # Folder containing ground truth JSON files
-generated_images_folder = "generated_images"  # Folder with images generated
+generated_images_folder = "generated_images_new"  # Folder with images generated
 
 def calculate_oks(pred_keypoints, gt_keypoints, sigmas, bbox_area):
     """
