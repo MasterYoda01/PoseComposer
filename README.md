@@ -1,3 +1,8 @@
+## Motivation
+
+Current methods of adding conditions to text-to-image diffusion models require computationally expensive re-training or fine-tuning. We present PoseComposer, a method of adding multi-subject and spatially controlled image generation with forward passes only. The method uses pre-trained Primary and Secondary models. The Primary model drives image generation, and the Secondary model injects information into the U-Net of the Primary model. The result is a diffusion model that can generate images with personalized multi-subject image generation and controllable pose, without fine-tuning. Our method enables highly personalized content creation on consumer hardware.
+
+
 ### Environment Setup
 
 Clone the repository with submodules.
